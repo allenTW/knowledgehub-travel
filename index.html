@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>旅遊地點收藏</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#0e1014; --surface:#16191f; --border:#2a303a; --text:#e8eaed; --muted:#8b93a1; --accent:#7fd4c1; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 -apple-system,"PingFang TC",sans-serif; }
+  header { position:sticky; top:0; z-index:500; background:var(--bg); padding:12px 16px; border-bottom:1px solid var(--border); }
+  h1 { margin:0 0 8px; font-size:18px; }
+  input,select { background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px 10px; font:inherit; }
+  input { width:100%; max-width:420px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; align-items:center; }
+  .tab { background:var(--surface); border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:5px 12px; cursor:pointer; }
+  .tab.on { color:var(--bg); background:var(--accent); border-color:var(--accent); }
+  #map { height:calc(100vh - 150px); display:none; }
+  #list { padding:12px 16px; display:grid; gap:10px; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:12px 14px; }
+  .card h3 { margin:0 0 4px; font-size:16px; }
+  .meta { color:var(--muted); font-size:13px; }
+  .card p { margin:6px 0; white-space:pre-line; font-size:14px; color:#c9ced6; }
+  a { color:var(--accent); text-decoration:none; }
+  .count { color:var(--muted); font-size:13px; }
+  .leaflet-popup-content-wrapper,.leaflet-popup-tip { background:var(--surface) !important; color:var(--text) !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>旅遊地點收藏 <span class="count" id="count"></span></h1>
+  <input id="q" type="search" placeholder="搜尋地名、城市、內容">
+  <div class="row" id="types"></div>
+  <div class="row">
+    <select id="city"><option value="">全部地區</option></select>
+    <button class="tab on" id="vList">清單</button>
+    <button class="tab" id="vMap">地圖</button>
+  </div>
+</header>
+<div id="map"></div>
+<div id="list"></div>
+<script>
+const ICON = { 景點:"🏞", 餐廳:"🍜", 咖啡甜點:"☕", 住宿:"🏨", 交通:"🚆", 購物:"🛍", 旅遊資訊:"🧭" };
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let items = [], type = "", city = "", q = "", view = "list", map = null, layer = null;
+const cityOf = a => [a.place.country, a.place.city].filter(Boolean).join(" · ");
+const mapsUrl = a => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(
+  [a.place.name || a.title, a.place.address || a.place.area, a.place.city, a.place.country].filter(Boolean).join(" "));
+const filtered = () => items.filter(a =>
+  (!type || a.place.type === type) && (!city || cityOf(a) === city) &&
+  (!q || (a.title + a.summary + JSON.stringify(a.place)).toLowerCase().includes(q)));
+
+function renderTypes() {
+  const types = [...new Set(items.map(a => a.place.type).filter(Boolean))];
+  document.getElementById("types").innerHTML = ["", ...types].map(t =>
+    `<button class="tab ${t === type ? "on" : ""}" data-t="${esc(t)}">${t ? (ICON[t] || "") + " " + esc(t) : "全部"}</button>`).join("");
+}
+function render() {
+  const list = filtered();
+  document.getElementById("count").textContent = `${list.length} 則`;
+  document.getElementById("list").innerHTML = view !== "list" ? "" : list.map(a => `
+    <div class="card"><h3>${ICON[a.place.type] || "📍"} ${esc(a.place.name || a.title)}</h3>
+      <div class="meta">${esc([a.place.type, cityOf(a), a.place.area].filter(Boolean).join(" · "))}</div>
+      <p>${esc(a.summary)}</p>
+      <div class="meta">${a.place.price ? "💰 " + esc(a.place.price) + " · " : ""}${a.place.hours ? "🕒 " + esc(a.place.hours) : ""}</div>
+      <div><a href="${mapsUrl(a)}" target="_blank" rel="noopener">地圖</a> ·
+        <a href="${esc(a.url)}" target="_blank" rel="noopener">原文</a></div></div>`).join("");
+  if (view === "map") renderMap(list);
+}
+function renderMap(list) {
+  if (!map) {
+    map = L.map("map").setView([23.7, 121], 7);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap" }).addTo(map);
+  }
+  if (layer) layer.remove();
+  layer = L.layerGroup().addTo(map);
+  const pts = [];
+  for (const a of list) {
+    if (a.place.lat == null) continue;
+    pts.push([a.place.lat, a.place.lng]);
+    L.marker([a.place.lat, a.place.lng]).addTo(layer).bindPopup(
+      `<b>${esc(a.place.name || a.title)}</b><br>${esc(a.place.type || "")}<br><a href="${mapsUrl(a)}" target="_blank" rel="noopener">開啟地圖</a> · <a href="${esc(a.url)}" target="_blank" rel="noopener">原文</a>`);
+  }
+  if (pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 12 });
+  setTimeout(() => map.invalidateSize(), 50);
+}
+function setView(v) {
+  view = v;
+  document.getElementById("map").style.display = v === "map" ? "block" : "none";
+  document.getElementById("list").style.display = v === "list" ? "grid" : "none";
+  document.getElementById("vList").classList.toggle("on", v === "list");
+  document.getElementById("vMap").classList.toggle("on", v === "map");
+  if (v === "map" && !window.L) {
+    const s = document.createElement("script");
+    s.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    s.onload = render;
+    document.head.appendChild(s);
+    return;
+  }
+  render();
+}
+document.getElementById("q").oninput = e => { q = e.target.value.trim().toLowerCase(); render(); };
+document.getElementById("city").onchange = e => { city = e.target.value; render(); };
+document.getElementById("types").onclick = e => { const t = e.target.closest("[data-t]"); if (t) { type = t.dataset.t; renderTypes(); render(); } };
+document.getElementById("vList").onclick = () => setView("list");
+document.getElementById("vMap").onclick = () => setView("map");
+fetch("data.json").then(r => r.json()).then(d => {
+  items = d;
+  const cities = [...new Set(items.map(cityOf).filter(Boolean))].sort();
+  document.getElementById("city").innerHTML += cities.map(c => `<option>${esc(c)}</option>`).join("");
+  renderTypes(); render();
+});
+</script>
+</body>
+</html>
